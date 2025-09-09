@@ -23,22 +23,26 @@ const Navbar = () => {
       >
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex justify-between h-16 items-center">
+            {/* Logo clickable */}
             <motion.div
               initial={{ x: -50, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.5 }}
               className="flex items-center space-x-3"
             >
-              <img
-                src={LogoPima}
-                alt="Logo PIMA"
-                className="h-14 w-auto object-contain drop-shadow-md"
-              />
-              <span className="text-2xl font-extrabold tracking-wide">
-                PIMA
-              </span>
+              <NavLink to="/" className="flex items-center space-x-3">
+                <img
+                  src={LogoPima}
+                  alt="Logo PIMA"
+                  className="h-14 w-auto object-contain drop-shadow-md cursor-pointer"
+                />
+                <span className="text-2xl font-extrabold tracking-wide">
+                  PIMA
+                </span>
+              </NavLink>
             </motion.div>
 
+            {/* Categorías */}
             <motion.div
               initial={{ x: 50, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}

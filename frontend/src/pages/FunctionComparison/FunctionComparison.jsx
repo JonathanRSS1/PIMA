@@ -872,9 +872,7 @@ export default function FunctionComparison() {
 
         <div className="md:col-span-2 flex items-center gap-2">
           <button onClick={exportCSV} className="px-4 py-2 bg-green-600 text-white rounded">Exportar CSV</button>
-          <button onClick={() => setShowGGB((s) => !s)} className="px-4 py-2 bg-indigo-600 text-white rounded">
-            {showGGB ? "Ocultar GeoGebra" : "Mostrar GeoGebra"}
-          </button>
+          
           <button onClick={exportSVG} className="px-4 py-2 bg-sky-600 text-white rounded" disabled={exporting}>
             {exporting ? "Exportando..." : "Exportar imagen (SVG)"}
           </button>
