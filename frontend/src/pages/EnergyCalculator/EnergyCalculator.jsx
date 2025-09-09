@@ -6,15 +6,6 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Html, useFBX } from "@react-three/drei";
 import "./EnergyCalculator.css";
 
-/**
- * EnergyCalculatorWithFBX.jsx
- * - Carga FBX: Casa3 + electrodomésticos (Lavadora, Secadora, Refrigeradora, Tv, Computadora)
- * - Mantiene GeoGebra robusto y UI original.
- *
- * Coloca los FBX en /public: /Casa3.fbx, /Lavadora.fbx, /Secadora.fbx,
- * /Refrigeradora.fbx, /Tv.fbx, /Computadora.fbx
- */
-
 export default function EnergyCalculator() {
   const APPLIANCES = [
     { id: "horno", name: "Horno eléctrico", category: "Alto consumo", defaultKW: 2.0, icon: "🔥" },
@@ -432,7 +423,7 @@ export default function EnergyCalculator() {
             <div className="w-12 h-12 rounded-2xl gradient-bg flex items-center justify-center text-2xl">⚡</div>
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Calculadora de Energía</h1>
           </div>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">Interactiva — GeoGebra en vivo + modelo 3D.</p>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">Calcula la cantidad de energia que gastas en casa.</p>
         </motion.div>
 
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">

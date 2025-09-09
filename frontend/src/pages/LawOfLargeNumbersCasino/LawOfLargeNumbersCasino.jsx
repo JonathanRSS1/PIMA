@@ -457,8 +457,8 @@ export default function LawOfLargeNumbersCasino() {
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-white p-6">
       <header className="max-w-7xl mx-auto flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold">Virtual Casino · Law of Large Numbers</h1>
-          <p className="text-slate-300 mt-1">GeoGebra integrated with native sliders (p, A, N). Roulette without ball.</p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold"> Casino Virtual · Ley de los grandes numeros</h1>
+          <p className="text-slate-300 mt-1">Con Geogebra.</p>
         </div>
       </header>
 

@@ -423,7 +423,7 @@ LHS=${results.pythagoras.lhs} RHS=${results.pythagoras.rhs}`); } catch (e) {}
   transition={{ duration: 0.45 }} 
   className="lg:col-span-4 bg-white/5 backdrop-blur-md p-6 rounded-2xl shadow-2xl"
 >
-          <h2 className="text-2xl font-bold mb-2">Geo • Triángulos interactivos</h2>
+          <h2 className="text-2xl font-bold mb-2">Triángulos interactivos</h2>
           <p className="text-sm text-slate-300 mb-4">Introduce lados (en unidades) o usa los valores por defecto y presiona <span className="font-semibold">DIBUJAR</span>.</p>
 
           <div className="grid grid-cols-1 gap-3">
@@ -449,7 +449,7 @@ LHS=${results.pythagoras.lhs} RHS=${results.pythagoras.rhs}`); } catch (e) {}
             <div className="mt-4 text-sm text-slate-300 p-3 rounded-lg bg-white/2">
               <strong>Tips:</strong>
               <ul className="mt-2 list-disc ml-5">
-                <li>Si no ves nada, revisa la consola o verifica conexión a geogebra.org.</li>
+                <li>Si no ves nada, revisa tu conexion </li>
                 <li>Puedes arrastrar los vértices en el applet (si lo haces, pulsa <em>CALCULAR</em> para sincronizar).</li>
               </ul>
             </div>

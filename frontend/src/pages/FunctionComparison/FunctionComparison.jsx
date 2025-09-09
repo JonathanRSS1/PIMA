@@ -839,7 +839,7 @@ export default function FunctionComparison() {
   // render
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <h1 className="text-3xl font-bold text-indigo-600 text-center">⚖️ Comparison of Functions</h1>
+      <h1 className="text-3xl font-bold text-indigo-600 text-center">⚖️ Comparacion de funciones</h1>
 
       <h2 className="text-xl font-semibold text-center text-indigo-600">Plano cartesiano (GeoGebra)</h2>
 
@@ -993,10 +993,9 @@ export default function FunctionComparison() {
       </div>
 
       <footer className="text-xs text-gray-500 text-center">
-        <ol className="list-decimal pl-5">
+        <ol className="list pl-5">
           <li>Intervalo usado: [{a}, {b}]</li>
           <li>Muestra: {sampled.length} puntos</li>
-          <li>Funciones evaluadas con una evaluación segura (safeEval) que maneja ^ como potencia.</li>
         </ol>
       </footer>
     </div>
