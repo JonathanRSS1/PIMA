@@ -98,7 +98,7 @@ export default function EnergyCalculator() {
 
   const categories = useMemo(() => Array.from(new Set(APPLIANCES.map((a) => a.category))), []);
 
-  /* ---- resumen y computeCostForX (igual que antes) ---- */
+  /* ---- resumen (TARIFA ÚNICA: toda la energía se cobra a la tarifa del tramo donde cae el total) ---- */
   const summary = useMemo(() => {
     const items = Object.values(selected);
     const perItem = items.map((it) => {
@@ -111,43 +111,60 @@ export default function EnergyCalculator() {
 
     const totalKWh = perItem.reduce((s, it) => s + it.monthlyKWh, 0);
 
-    const normalized = tiers.map((t) => ({ ...t })).sort((a, b) => Number(a.from ?? 0) - Number(b.from ?? 0));
-    let prevCap = 0;
-    let remaining = totalKWh;
+    // normalizar y ordenar tramos
+    const normalized = tiers
+      .map((t) => ({ ...t }))
+      .sort((a, b) => Number(a.from ?? 0) - Number(b.from ?? 0));
+
+    // buscar el tramo donde cae el total (tarifa única)
+    let applicable = normalized.find((t) => {
+      const from = Number(t.from ?? 0);
+      const to = t.to === null || t.to === "" ? Number.POSITIVE_INFINITY : Number(t.to);
+      return totalKWh >= from && totalKWh <= to;
+    });
+
     let totalCost = 0;
     const breakdown = [];
-    for (const t of normalized) {
-      const cap = t.to === null || t.to === "" ? Number.POSITIVE_INFINITY : Number(t.to);
-      const consumed = Math.max(0, Math.min(totalKWh, cap) - prevCap);
-      const cost = consumed * Number(t.rate || 0);
-      if (consumed > 0) breakdown.push({ tier: t, consumed, cost, from: prevCap, to: cap });
-      totalCost += cost;
-      remaining = Math.max(0, remaining - consumed);
-      prevCap = cap;
-      if (remaining <= 0) break;
-    }
-    if (remaining > 0) {
-      breakdown.push({ tier: null, consumed: remaining, cost: 0, from: prevCap, to: Number.POSITIVE_INFINITY, note: "Sin tarifa definida" });
+
+    if (totalKWh > 0) {
+      if (applicable) {
+        const rate = Number(applicable.rate || 0);
+        totalCost = totalKWh * rate;
+        breakdown.push({
+          tier: applicable,
+          consumed: totalKWh,
+          cost: totalCost,
+          note: "Tarifa única aplicada (todo el consumo a este tramo)",
+          from: applicable.from,
+          to: applicable.to,
+        });
+      } else {
+        breakdown.push({
+          tier: null,
+          consumed: totalKWh,
+          cost: 0,
+          note: "Sin tarifa definida",
+          from: 0,
+          to: Number.POSITIVE_INFINITY,
+        });
+      }
     }
 
     return { perItem, totalKWh, totalCost, breakdown };
   }, [selected, tiers]);
 
+  /* ---- computeCostForX (tarifa única) ---- */
   const computeCostForX = (x) => {
     if (!Array.isArray(tiers) || tiers.length === 0) return 0;
+    if (!(x > 0)) return 0;
+
     const parts = tiers
-      .map((t) => ({ from: Number(t.from ?? 0), to: t.to === null || t.to === "" ? null : Number(t.to), rate: Number(t.rate || 0) }))
+      .map((t) => ({ from: Number(t.from ?? 0), to: t.to === null || t.to === "" ? Number.POSITIVE_INFINITY : Number(t.to), rate: Number(t.rate || 0) }))
       .sort((a, b) => a.from - b.from);
-    let remaining = x;
-    let cost = 0;
-    for (let i = 0; i < parts.length && remaining > 0; i++) {
-      const p = parts[i];
-      const capWidth = p.to === null ? Number.POSITIVE_INFINITY : Math.max(0, p.to - p.from);
-      const used = Math.min(remaining, capWidth);
-      cost += used * p.rate;
-      remaining -= used;
-    }
-    return cost;
+
+    const applicable = parts.find((p) => x >= p.from && x <= p.to);
+    if (applicable) return x * applicable.rate;
+    return 0;
   };
 
   /* ---------------- inject deployggb.js (igual que antes) ---------------- */
@@ -282,7 +299,7 @@ export default function EnergyCalculator() {
     };
   }, [ggbHeight, forceTickRef.current]);
 
-  /* ---------------- update GeoGebra (igual que antes) ---------------- */
+  /* ---------------- update GeoGebra (ahora tarifa única) ---------------- */
   const safeDelete = (ggb, name) => {
     if (!ggb) return;
     try {
@@ -299,39 +316,28 @@ export default function EnergyCalculator() {
       const ggb = ggbRef.current || window.ggbApplet;
       if (!ggb || typeof ggb.evalCommand !== "function") return;
 
+      // build parts normalized for tarifa única f(x) = rate * x inside each interval
       const parts = tiers
         .map((t) => ({ from: Number(t.from ?? 0), to: t.to === null || t.to === "" ? null : Number(t.to), rate: Number(t.rate || 0) }))
         .sort((a, b) => a.from - b.from);
 
-      const prefixSumString = (upToIdx) => {
-        const terms = [];
-        for (let i = 0; i < upToIdx; i++) {
-          const ti = parts[i];
-          const width = ti.to === null ? null : ti.to - ti.from;
-          if (width === null || isNaN(width)) continue;
-          terms.push(`${ti.rate}*(${width})`);
-        }
-        if (terms.length === 0) return "0";
-        return terms.join(" + ");
-      };
-      const buildRec = (idx) => {
+      // Build expression like:
+      // If[x <= U1, r1*x, If[x <= U2, r2*x, r3*x]]
+      const buildRateExpr = (idx) => {
         const p = parts[idx];
         if (!p) return "0";
         const upper = p.to;
         const rate = p.rate;
         if (upper === null || idx === parts.length - 1) {
-          const fixed = prefixSumString(idx);
-          if (fixed === "0") return `${rate}*(x - ${p.from})`;
-          return `${fixed} + ${rate}*(x - ${p.from})`;
+          return `${rate}*x`;
         } else {
-          const fixedBefore = prefixSumString(idx);
-          const inside = `${fixedBefore} + ${rate}*(x - ${p.from})`;
-          return `If[x <= ${upper}, ${inside}, ${buildRec(idx + 1)}]`;
+          // if x <= upper use rate*x else recurse
+          return `If[x <= ${upper}, ${rate}*x, ${buildRateExpr(idx + 1)}]`;
         }
       };
 
       let expr = "0";
-      if (parts.length > 0) expr = buildRec(0);
+      if (parts.length > 0) expr = buildRateExpr(0);
 
       const toRemove = ["f", "P", "LabelText", "A_LineaConsumo", "B_LineaConsumo", "LineaConsumo", "areaFill"];
       toRemove.forEach((n) => safeDelete(ggb, n));
@@ -413,6 +419,188 @@ export default function EnergyCalculator() {
     const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${xToPx(p.x).toFixed(2)},${yToPx(p.y).toFixed(2)}`).join(" ");
     return { svg: `<svg width="${viewW}" height="${viewH}" viewBox="0 0 ${viewW} ${viewH}" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="${viewW}" height="${viewH}" fill="#fff" rx="6"/><path d="${path}" fill="none" stroke="#0077cc" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>` };
   }, [summary, tiers]);
+
+  /* -------------------- RECEIPT / DOWNLOAD --------------------- */
+  const formatCurrency = (v) => `$${Number(v || 0).toFixed(2)}`;
+
+  const downloadReceipt = async () => {
+    try {
+      const items = summary.perItem || [];
+      const breakdown = summary.breakdown || [];
+      const dateStr = new Date().toLocaleString();
+
+      const itemsRows = items
+        .map(
+          (it) => `
+        <tr>
+          <td style="padding:6px 12px; border-bottom:1px solid #eee; font-size:13px;">${escapeHtml(it.name)}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #eee; font-size:13px; text-align:center;">${it.quantity}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #eee; font-size:13px; text-align:center;">${Number(it.powerKW).toFixed(2)}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #eee; font-size:13px; text-align:center;">${it.hoursPerMonth}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #eee; font-size:13px; text-align:right;">${Number(it.monthlyKWh).toFixed(2)} kWh</td>
+        </tr>
+      `,
+        )
+        .join("\n");
+
+      const breakdownRows = breakdown
+        .map(
+          (b) => `
+        <tr>
+          <td style="padding:4px 12px; font-size:13px; border-bottom:1px dashed #f1f1f1;">${
+            b.tier ? `${b.tier.from ?? b.from}–${b.tier.to === null ? "∞" : b.tier.to} kWh` : `Desde ${b.from} kWh`
+          }</td>
+          <td style="padding:4px 12px; font-size:13px; text-align:right;">${Number(b.consumed).toFixed(2)} kWh</td>
+          <td style="padding:4px 12px; font-size:13px; text-align:right;">${formatCurrency(b.cost)}</td>
+        </tr>
+      `,
+        )
+        .join("\n");
+
+      const width = 900;
+      const headerH = 140;
+      const footerH = 140;
+      const itemsH = Math.max(1, items.length) * 28;
+      const breakdownH = Math.max(1, breakdown.length) * 28;
+      const height = headerH + itemsH + breakdownH + footerH;
+
+      const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='0 0 ${width} ${height}'>
+          <defs>
+            <style>
+              .body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+            </style>
+          </defs>
+          <rect width='100%' height='100%' fill='#f7f9fc' rx='16' />
+          <foreignObject x='20' y='20' width='${width - 40}' height='${height - 40}'>
+            <div xmlns='http://www.w3.org/1999/xhtml' class='body' style='width:${width - 40}px; height:${height - 40}px; box-sizing:border-box; padding:20px;'>
+
+              <div style='display:flex; justify-content:space-between; align-items:center; gap:12px;'>
+                <div style='display:flex; gap:12px; align-items:center;'>
+                  <div style='width:72px; height:72px; background:linear-gradient(135deg,#7c3aed,#06b6d4); border-radius:12px; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:28px;'>⚡</div>
+                  <div>
+                    <div style='font-size:20px; font-weight:700; color:#0f172a;'>Factura de Energía — PIMA</div>
+                    <div style='font-size:13px; color:#6b7280;'>Recibo estimado generado ${escapeHtml(dateStr)}</div>
+                  </div>
+                </div>
+                <div style='text-align:right;'>
+                  <div style='font-size:14px; color:#6b7280;'>Usuario</div>
+                  <div style='font-weight:700; font-size:18px;'>Cliente PIMA</div>
+                </div>
+              </div>
+
+              <div style='margin-top:18px; display:flex; gap:12px;'>
+                <div style='flex:1; background:#ffffff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,20,40,0.04);'>
+                  <div style='font-size:13px; color:#334155; margin-bottom:6px;'>Resumen</div>
+                  <div style='display:flex; align-items:center; justify-content:space-between;'>
+                    <div>
+                      <div style='font-size:12px; color:#6b7280;'>Consumo total mensual</div>
+                      <div style='font-weight:700; font-size:20px; color:#0ea5e9;'>${Number(summary.totalKWh).toFixed(2)} kWh</div>
+                    </div>
+                    <div style='text-align:right;'>
+                      <div style='font-size:12px; color:#6b7280;'>Costo estimado</div>
+                      <div style='font-weight:700; font-size:20px; color:#10b981;'>${formatCurrency(summary.totalCost)}</div>
+                    </div>
+                  </div>
+                </div>
+                <div style='width:220px; background:#ffffff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,20,40,0.04);'>
+                  <div style='font-size:12px; color:#6b7280; margin-bottom:8px;'>Mini gráfico costo</div>
+                  <div>${miniSpark.svg}</div>
+                </div>
+              </div>
+
+              <div style='margin-top:18px; background:#fff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,20,40,0.04);'>
+                <div style='font-size:14px; font-weight:700; color:#0f172a; margin-bottom:8px;'>Aparatos</div>
+                <div style='overflow:auto;'>
+                  <table style='width:100%; border-collapse:collapse;'>
+                    <thead>
+                      <tr>
+                        <th style='text-align:left; padding:8px 12px; font-size:12px; color:#6b7280;'>Nombre</th>
+                        <th style='padding:8px 12px; font-size:12px; color:#6b7280; text-align:center;'>Cant.</th>
+                        <th style='padding:8px 12px; font-size:12px; color:#6b7280; text-align:center;'>kW</th>
+                        <th style='padding:8px 12px; font-size:12px; color:#6b7280; text-align:center;'>hrs/mes</th>
+                        <th style='padding:8px 12px; font-size:12px; color:#6b7280; text-align:right;'>kWh/mes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${items.length ? itemsRows : `<tr><td colspan='5' style='padding:12px; text-align:center; color:#9ca3af;'>No hay aparatos seleccionados</td></tr>`}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div style='margin-top:14px; display:flex; gap:12px;'>
+                <div style='flex:1; background:#fff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,20,40,0.04);'>
+                  <div style='font-size:14px; font-weight:700; color:#0f172a; margin-bottom:8px;'>Desglose por tramos</div>
+                  <table style='width:100%; border-collapse:collapse;'>
+                    <thead>
+                      <tr>
+                        <th style='text-align:left; padding:6px 12px; font-size:12px; color:#6b7280;'>Tramo</th>
+                        <th style='text-align:right; padding:6px 12px; font-size:12px; color:#6b7280;'>kWh</th>
+                        <th style='text-align:right; padding:6px 12px; font-size:12px; color:#6b7280;'>Costo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${breakdown.length ? breakdownRows : `<tr><td colspan='3' style='padding:12px; text-align:center; color:#9ca3af;'>Sin desglose</td></tr>`}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style='width:260px; background:#fff; padding:12px; border-radius:10px; box-shadow:0 6px 18px rgba(12,20,40,0.04);'>
+                  <div style='font-size:13px; color:#6b7280;'>Resumen</div>
+                  <div style='margin-top:8px; display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='font-size:13px; color:#374151;'>Consumo total</div>
+                    <div style='font-weight:700; font-size:16px; color:#0ea5e9;'>${Number(summary.totalKWh).toFixed(2)} kWh</div>
+                  </div>
+                  <div style='margin-top:8px; display:flex; justify-content:space-between; align-items:center;'>
+                    <div style='font-size:13px; color:#374151;'>Costo estimado</div>
+                    <div style='font-weight:700; font-size:18px; color:#10b981;'>${formatCurrency(summary.totalCost)}</div>
+                  </div>
+
+                  <div style='margin-top:12px; font-size:12px; color:#6b7280;'>Tarifas utilizadas</div>
+                  <div style='margin-top:8px; font-size:13px;'>
+                    ${tiers.map(t => `<div style='display:flex; justify-content:space-between; padding:6px 0; border-top:1px dashed #f3f4f6;'><div>${t.from ?? 0}${t.to === null || t.to === '' ? ' – ∞' : ' – ' + t.to} kWh</div><div style='font-weight:700;'>${formatCurrency(t.rate)}</div></div>`).join('')}
+                  </div>
+                </div>
+              </div>
+
+              <div style='margin-top:20px; display:flex; justify-content:space-between; align-items:center;'>
+                <div style='font-size:12px; color:#9ca3af;'>Este documento es una estimación generada por PIMA.</div>
+                <div style='text-align:right;'>
+                  <div style='font-weight:700; font-size:18px; color:#0f172a;'>Total: ${formatCurrency(summary.totalCost)}</div>
+                  <div style='font-size:12px; color:#6b7280;'>Generado: ${escapeHtml(dateStr)}</div>
+                </div>
+              </div>
+
+            </div>
+          </foreignObject>
+        </svg>
+      `;
+
+      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+      const a = document.createElement('a');
+      const fileName = `Factura_PIMA_${(new Date()).toISOString().slice(0,19).replace(/[:T]/g,'-')}.svg`;
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      a.rel = 'noopener';
+      try {
+        const ev = new MouseEvent('click');
+        a.dispatchEvent(ev);
+      } catch (e) {
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } catch (e) {
+      console.error('Error en downloadReceipt', e);
+    }
+  };
+
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str).replace(/[&<>"']/g, function (s) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[s];
+    });
+  }
 
   /* ----------------------------- RENDER ------------------------- */
   return (
@@ -559,25 +747,14 @@ export default function EnergyCalculator() {
                       <div className="text-sm text-muted-foreground">Costo estimado</div>
                       <div className="text-2xl font-bold">${summary.totalCost.toFixed(2)}</div>
                     </div>
-                    <div dangerouslySetInnerHTML={{ __html: miniSpark.svg }} />
-                  </div>
-
-                  {summary.breakdown.length > 0 && (
-                    <div className="mt-6">
-                      <h4 className="font-semibold text-card-foreground mb-3">Desglose por tramos</h4>
-                      <div className="space-y-2">
-                        {summary.breakdown.map((b, i) => (
-                          <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }} className="flex justify-between items-center p-3 bg-background/30 rounded-xl text-sm">
-                            <span className="text-muted-foreground">{b.tier ? `${b.tier.from ?? b.from} – ${b.tier.to === null ? "∞" : b.tier.to} kWh` : `Desde ${b.from} kWh`}</span>
-                            <div className="text-right">
-                              <div className="font-medium text-card-foreground">{b.consumed.toFixed(2)} kWh</div>
-                              <div className="text-accent font-bold">${b.cost.toFixed(2)} {b.note ? `(${b.note})` : ""}</div>
-                            </div>
-                          </motion.div>
-                        ))}
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div dangerouslySetInnerHTML={{ __html: miniSpark.svg }} />
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <motion.button type="button" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={downloadReceipt} className="px-3 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium">Descargar factura (SVG)</motion.button>
                       </div>
                     </div>
-                  )}
+                  </div>
+
                 </div>
               </motion.div>
             </div>
@@ -597,6 +774,7 @@ export default function EnergyCalculator() {
                   <planeGeometry args={[50, 50]} />
                   <meshStandardMaterial color="#e6eef9" />
                 </mesh>
+                {/* FBXHouseAndAppliances debe existir en tu proyecto; no lo toqué */}
                 <FBXHouseAndAppliances selected={selected} />
                 <gridHelper args={[20, 20, "#e2e8f0", "#e2e8f0"]} position={[0, -0.01, 0]} />
                 <OrbitControls makeDefault enablePan enableZoom enableRotate />
@@ -633,18 +811,46 @@ export default function EnergyCalculator() {
   );
 }
 
-/* ---------------- FBXHouseAndAppliances ----------------
-   Carga /Casa3.fbx y modelos de electrodomésticos desde /public
-   Si un FBX no está presente, usa fallback geométrico.
-   ------------------------------------------------------------------ */
+
+
+
 function FBXHouseAndAppliances({ selected = {} }) {
-  // rutas (espera que estén en /public)
-  const casaPath = "/Casa3.fbx";
-  const lavPath = "/Lavadora.FBX";
-  const secPath = "/Secadora.FBX";
-  const refPath = "/Refrigeradora.fbx";
-  const tvPath = "/Tv.fbx";
-  const pcPath = "/Computadora.fbx";
+  // Normaliza BASE_URL para que funcione en dev y en gh-pages (/PIMA/)
+  const base = import.meta.env.BASE_URL || "/";
+  const mk = (name) => {
+    // normalizar para evitar '//' accidental
+    if (!base.endsWith("/")) return `${base}/${name}`;
+    return `${base}${name}`;
+  };
+
+  // Rutas construidas con BASE_URL (puedes dejar "" en las que completarás luego)
+  const casaPath = mk("Casa3.fbx");
+  const lavPath = mk("Lavadora.FBX");
+  const secPath = mk("Secadora.FBX");
+  const refPath = mk("Refrigeradora.fbx");
+  const tvPath  = mk("Tv.fbx");
+  const pcPath  = mk("10120_LCD_Computer_Monitor_v01_max2011_it2.fbx");
+  const lampPath = mk("Space_Corona_FBX.FBX");
+  const hornoPath = mk("3d-model.fbx"); // ADDED: horno
+
+  // ---------- NUEVAS RUTAS (modelos que pediste integrar) ----------
+  const conditionerPath = mk("Conditioner.fbx"); // aire acondicionado
+  const mirashowerPath = mk("mirashower.fbx");   // calentador / termo
+  const vacuumPath = mk("17320_Canister_vacuum_cleaner_v1_fix.fbx"); // aspiradora
+  const ironPath = mk("10274_Clothes_Iron_v1_iterations-2.fbx"); // plancha
+  const blenderPath = mk("11627_Blender_v2_L3.fbx"); // licuadora / batidora
+  const dishwasherPath = mk("11636_Diswasher_v1_L3.fbx"); // lavavajillas
+  const microwavePath = mk("11642_Microwave_v1_L3.fbx"); // microondas
+  // -----------------------------------------------------------------
+
+  // --------- PLACEHOLDERS PARA MODELOS QUE AÚN NO TIENEN ARCHIVO (DEJA VACÍO)
+  const consolaPath = mk(""); // consola (rellena el nombre .fbx cuando lo tengas)
+  const cargadorPath = mk(""); // cargador
+  const routerPath = mk(""); // router
+  const ventiladorPath = mk("Fan1.fbx"); // ventilador
+  const secadorPeloPath = mk(""); // secador de pelo
+  const laptopPath = mk("MAC laptop.FBX"); // LAPTOP - placeholder, añade tu archivo .fbx aquí
+  // -----------------------------------------------------------------
 
   // useFBX (suspende si carga; si falla, React muestra fallback — atrapamos errores con try/catch abajo)
   let casaModel = null;
@@ -653,62 +859,235 @@ function FBXHouseAndAppliances({ selected = {} }) {
   let refModel = null;
   let tvModel = null;
   let pcModel = null;
+  let lampModel = null;
+  let hornoModel = null; // ADDED: horno
+
+  // ---------- Nuevos modelos: variables para useFBX ----------
+  let conditionerModel = null;
+  let mirashowerModel = null;
+  let vacuumModel = null;
+  let ironModel = null;
+  let blenderModel = null;
+  let dishwasherModel = null;
+  let microwaveModel = null;
+
+  // placeholdermodels
+  let consolaModel = null;
+  let cargadorModel = null;
+  let routerModel = null;
+  let ventiladorModel = null;
+  let secadorPeloModel = null;
+  let laptopModel = null; // LAPTOP model variable
+  // -----------------------------------------------------------
 
   try {
-    // Si alguno de estos archivos falta, useFBX normalmente lanzará; como estamos en Suspense,
-    // si hay error será visible en consola. Intentamos capturar para fallback.
     casaModel = useFBX(casaPath);
   } catch (e) {
     console.warn("No se pudo cargar Casa3.fbx (o la carga arrojó). Usando geometría fallback.", e);
     casaModel = null;
   }
-  try {
-    lavModel = useFBX(lavPath);
-  } catch (e) {
-    lavModel = null;
-  }
-  try {
-    secModel = useFBX(secPath);
-  } catch (e) {
-    secModel = null;
-  }
-  try {
-    refModel = useFBX(refPath);
-  } catch (e) {
-    refModel = null;
-  }
-  try {
-    tvModel = useFBX(tvPath);
-  } catch (e) {
-    tvModel = null;
-  }
-  try {
-    pcModel = useFBX(pcPath);
-  } catch (e) {
-    pcModel = null;
-  }
+  try { lavModel = useFBX(lavPath); } catch (e) { lavModel = null; }
+  try { secModel = useFBX(secPath); } catch (e) { secModel = null; }
+  try { refModel = useFBX(refPath); } catch (e) { refModel = null; }
+  try { tvModel  = useFBX(tvPath);  } catch (e) { tvModel  = null; }
+  try { pcModel  = useFBX(pcPath);  } catch (e) { pcModel = null; }
+  try { lampModel = useFBX(lampPath); } catch (e) { lampModel = null; }
+  try { hornoModel = useFBX(hornoPath); } catch (e) { hornoModel = null; }
+  try { microwaveModel = useFBX(microwavePath); } catch (e) { microwaveModel = null; }
+
+  // ---------- Cargar los nuevos FBX (si existen) ----------
+  try { conditionerModel = useFBX(conditionerPath); } catch (e) { conditionerModel = null; }
+  try { mirashowerModel = useFBX(mirashowerPath); } catch (e) { mirashowerModel = null; }
+  try { vacuumModel = useFBX(vacuumPath); } catch (e) { vacuumModel = null; }
+  try { ironModel = useFBX(ironPath); } catch (e) { ironModel = null; }
+  try { blenderModel = useFBX(blenderPath); } catch (e) { blenderModel = null; }
+  try { dishwasherModel = useFBX(dishwasherPath); } catch (e) { dishwasherModel = null; }
+
+  // ---------- PLACEHOLDER LOADS (archivo vacío por ahora) ----------
+  try { consolaModel = useFBX(consolaPath); } catch (e) { consolaModel = null; }
+  try { cargadorModel = useFBX(cargadorPath); } catch (e) { cargadorModel = null; }
+  try { routerModel = useFBX(routerPath); } catch (e) { routerModel = null; }
+  try { ventiladorModel = useFBX(ventiladorPath); } catch (e) { ventiladorModel = null; }
+  try { secadorPeloModel = useFBX(secadorPeloPath); } catch (e) { secadorPeloModel = null; }
+  try { laptopModel = useFBX(laptopPath); } catch (e) { laptopModel = null; }
+  // ----------------------------------------------------------
+
+  useEffect(() => {
+    if (!casaModel) return;
+    console.group("DEBUG FBX Casa — materiales y texturas");
+    const mats = new Set();
+    casaModel.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        const m = child.material;
+        if (!m) {
+          console.log("Mesh sin material:", child.name);
+          return;
+        }
+        if (Array.isArray(m)) {
+          m.forEach((mm, idx) => {
+            console.log("Mesh:", child.name, "material index:", idx, "name:", mm.name, "color:", mm.color ? mm.color.getHexString() : null, "map:", !!mm.map);
+            mats.add(mm.name || `idx_${idx}`);
+          });
+        } else {
+          console.log("Mesh:", child.name, "material:", (m.name || "(sin nombre)"), "color:", m.color ? m.color.getHexString() : null, "map:", !!m.map);
+          mats.add(m.name || "(sin nombre)");
+        }
+      }
+    });
+    console.log("Materiales únicos cargados:", Array.from(mats));
+    console.groupEnd();
+  }, [casaModel]);
+
+  /* ------------------ Helpers: normalizar materiales/normales + auto-scale ------------------ */
+  const normalizeAndAutoScale = (obj, targetMaxSize = 1.0) => {
+    if (!obj || !obj.traverse) return;
+    // recorrer meshes: normalizar materiales y calcular normales
+    obj.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = true;
+      child.receiveShadow = true;
+
+      // Geometry: si no tiene normales, calcúlalas
+      try {
+        const geom = child.geometry;
+        if (geom && !geom.attributes.normal) {
+          geom.computeVertexNormals();
+        }
+      } catch (err) {
+        // noop
+      }
+
+      // Material: si no es MeshStandardMaterial, crear uno nuevo conservando map/color/emissive
+      try {
+        const m = child.material;
+        if (!m) return;
+        // si es array de materiales, normalizar cada uno
+        if (Array.isArray(m)) {
+          const newMats = m.map((mm) => {
+            if (!mm) return mm;
+            if (mm.isMeshStandardMaterial) {
+              // asegurar encoding
+              if (mm.map) {
+                mm.map.encoding = THREE.sRGBEncoding;
+                mm.needsUpdate = true;
+              }
+              return mm;
+            }
+            const nm = new THREE.MeshStandardMaterial({
+              name: mm.name || mm.uuid,
+              color: mm.color ? mm.color.clone() : new THREE.Color(0xffffff),
+              emissive: mm.emissive ? mm.emissive.clone() : new THREE.Color(0x000000),
+              skinning: !!mm.skinning,
+              morphTargets: !!mm.morphTargets,
+            });
+            if (mm.map) {
+              mm.map.encoding = THREE.sRGBEncoding;
+              nm.map = mm.map;
+              nm.needsUpdate = true;
+            }
+            if (typeof mm.metalness === "number") nm.metalness = mm.metalness;
+            if (typeof mm.roughness === "number") nm.roughness = mm.roughness;
+            nm.flatShading = false;
+            return nm;
+          });
+          child.material = newMats;
+        } else {
+          if (!m.isMeshStandardMaterial) {
+            const nm = new THREE.MeshStandardMaterial({
+              name: m.name || m.uuid,
+              color: m.color ? m.color.clone() : new THREE.Color(0xffffff),
+              emissive: m.emissive ? m.emissive.clone() : new THREE.Color(0x000000),
+              skinning: !!m.skinning,
+              morphTargets: !!m.morphTargets,
+            });
+            if (m.map) {
+              m.map.encoding = THREE.sRGBEncoding;
+              nm.map = m.map;
+              nm.needsUpdate = true;
+            }
+            if (typeof m.metalness === "number") nm.metalness = m.metalness;
+            if (typeof m.roughness === "number") nm.roughness = m.roughness;
+            nm.flatShading = false;
+            child.material = nm;
+          } else {
+            // si ya es MeshStandardMaterial, asegurar sRGB para mapas
+            if (child.material.map) {
+              child.material.map.encoding = THREE.sRGBEncoding;
+              child.material.needsUpdate = true;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("normalizeAndAutoScale - material normalization error", err);
+      }
+    });
+
+    // Auto-scale: ajustar escala del root `obj` para que su mayor dimensión sea targetMaxSize
+    try {
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const maxDim = Math.max(size.x || 0.0001, size.y || 0.0001, size.z || 0.0001);
+      if (maxDim > 0) {
+        const s = targetMaxSize / maxDim;
+        obj.scale.setScalar(s);
+        // centrar en su origen (opcional: mantengo posición actual pero ajusto offset)
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        obj.position.sub(center.multiplyScalar(s)); // recentrar para que su centro quede cerca del origen
+      }
+    } catch (err) {
+      // noop
+    }
+  };
+
+  /* ------------------ Aplicar normalización/auto-scale cuando los modelos estén listos ------------------ */
+  useEffect(() => {
+    const toNormalize = [
+      casaModel, lavModel, secModel, refModel, tvModel, pcModel, lampModel, hornoModel,
+      conditionerModel, mirashowerModel, vacuumModel, ironModel, blenderModel, dishwasherModel, microwaveModel,
+      consolaModel, cargadorModel, routerModel, ventiladorModel, secadorPeloModel, laptopModel
+    ];
+    toNormalize.forEach((m) => {
+      if (m) {
+        try {
+          normalizeAndAutoScale(m, 0.8); // 0.8 como tamaño de referencia (ajusta si hace falta)
+        } catch (e) { /* swallow */ }
+      }
+    });
+    console.log("normalizeAndAutoScale aplicado a modelos existentes.");
+  }, [
+    casaModel, lavModel, secModel, refModel, tvModel, pcModel, lampModel, hornoModel,
+    conditionerModel, mirashowerModel, vacuumModel, ironModel, blenderModel, dishwasherModel, microwaveModel,
+    consolaModel, cargadorModel, routerModel, ventiladorModel, secadorPeloModel, laptopModel
+  ]);
 
   // Anchors (misma lógica previa) - posiciones en la escena (x,y,z), floor index menor = piso inferior
   const floorHeight = 1.2;
   const gap = 0.03;
   const anchors = {
     tv_65: [{ floor: 0, pos: [-23, 8.16, 2.4], rotY: 0 }],
-    refrigerador: [{ floor: 0, pos: [2.0, -0.5, 0.8], rotY: Math.PI / 2 }],
-    lavadora_caliente: [{ floor: 0, pos: [-2.0, -0.45, 0.8], rotY: -Math.PI / 2 }],
-    microondas: [{ floor: 0, pos: [1.2, -0.25, -0.6], rotY: 0 }],
-    pc: [{ floor: 1, pos: [-1.2, -0.25, -0.5], rotY: 0 }],
-    horno: [{ floor: 0, pos: [1.6, -0.35, -1.6], rotY: 0 }],
-    secadora: [{ floor: 0, pos: [0, -0.15, -2.4], rotY: -Math.PI / 2 }],
-    lavavajillas: [{ floor: 0, pos: [0.8, -0.35, -1.0], rotY: 0 }],
-    laptop: [{ floor: 1, pos: [4, 0.0, -0.3], rotY: 0 }],
-    foco_led: [{ floor: 2, pos: [0, 0.4, 0], rotY: 0 }],
+    secadora: [{ floor: 0, pos: [105, -39, -29], rotY: 0 }],
+    refrigerador: [{ floor: 0, pos: [-24, 0, -20], rotY: 0 }],
+    lavadora_caliente: [{ floor: 0, pos: [112, -39, -29], rotY: 0 }],
+    foco_led: [{ floor: 0, pos: [1, -5, 7], rotY: 0 }],
+    horno: [{ floor: 0, pos: [-5.6, 0, -22], rotY: 0 }],
+    pc: [{ floor: 1, pos: [17, 36, 8], rotY: 0 }],
+    microondas: [{ floor: 0, pos: [1.2, 7, -21], rotY: 0 }],
+    lavavajillas: [{ floor: 0, pos: [0.8, -0.35, -19.0], rotY: 0 }],
+    laptop: [{ floor: 0, pos: [-31, 44.5, 6.3], rotY: 20 }],
     cargador: [{ floor: 2, pos: [0.6, -0.1, -0.2], rotY: 0 }],
     router: [{ floor: 2, pos: [-0.8, -0.1, -0.2], rotY: 0 }],
     consola: [{ floor: 1, pos: [0.8, -0.2, 0.7], rotY: 0 }],
-    batidora: [{ floor: 0, pos: [0.4, -0.2, -0.9], rotY: 0 }],
-    ventilador: [{ floor: 2, pos: [1.0, -0.2, 0.5], rotY: 0 }],
-    secador_pelo: [{ floor: 2, pos: [-1.0, -0.2, 0.5], rotY: 0 }],
-    aspiradora: [{ floor: 0, pos: [0.0, -0.35, 1.2], rotY: 0 }],
+    batidora: [{ floor: 0, pos: [0.4, 7, -19], rotY: 0 }], // licuadora / batidora
+ventilador: [{ floor: 0, pos: [1.0, 30, -3.5], rotY: 0, rotZ: Math.PI }],    
+  secador_pelo: [{ floor: 2, pos: [-1.0, -0.2, 0.5], rotY: 0 }],
+    aspiradora: [{ floor: 0, pos: [10.0, 0, -15], rotY: 0 }],
+    aire_split: [{ floor: 0, pos: [-22, 45, 19], rotY: 0 }], // aire acondicionado
+    termo: [{ floor: 0, pos: [-1.0, 22, 7.5], rotY: 0 }], // calentador / termo
+    plancha: [{ floor: 0, pos: [21.0, 16.5, 19.0], rotY: 0 }], // plancha
   };
 
   function resolveAnchorsFor(id, quantity) {
@@ -795,17 +1174,63 @@ function FBXHouseAndAppliances({ selected = {} }) {
           // decide qué modelo FBX usar
           let modelObj = null;
           let modelScale = 1;
-          if (id === "lavadora_caliente" || id === "lavadora") { modelObj = lavModel; modelScale = 0.1; }
-          if (id === "secadora") { modelObj = secModel; modelScale = 0.1; }
+
+          // EXISTENTES
+          if (id === "lavadora_caliente" || id === "lavadora") { modelObj = lavModel; modelScale = 0.06; }
+          if (id === "secadora") { modelObj = secModel; modelScale = 0.06; }
           if (id === "refrigerador") { modelObj = refModel; modelScale = 0.08; }
           if (id === "tv_65") { modelObj = tvModel; modelScale = 0.2; }
-          if (id === "pc" || id === "laptop") { modelObj = pcModel; modelScale = 1.5; }
+          if (id === "pc") { modelObj = pcModel; modelScale = 0.1; }
+          if (id === "foco_led") { modelObj = lampModel; modelScale = 0.2; }
+          if (id === "horno") { modelObj = hornoModel; modelScale = 0.17; }
+
+          // --------- NUEVOS MAPEOS (los que pediste integrar) ----------
+          if (id === "aire_split") { modelObj = conditionerModel; modelScale = 0.09; }         // Conditioner.fbx
+          if (id === "termo") { modelObj = mirashowerModel; modelScale = 0.01; }               // mirashower.fbx
+          if (id === "aspiradora") { modelObj = vacuumModel; modelScale = 0.05; }              // vacuum FBX
+          if (id === "plancha") { modelObj = ironModel; modelScale = 0.07; }                   // iron FBX
+          if (id === "batidora") { modelObj = blenderModel; modelScale = 0.07; }               // blender FBX
+          if (id === "lavavajillas") { modelObj = dishwasherModel; modelScale = 0.09; }        // dishwasher FBX
+          if (id === "microondas") { modelObj = microwaveModel; modelScale = 0.07; }
+
+          // PLACEHOLDER MAPEOS: tendrás que poner los .fbx en las rutas arriba
+          if (id === "consola") { modelObj = consolaModel; modelScale = 0.08; }
+          if (id === "cargador") { modelObj = cargadorModel; modelScale = 0.06; }
+          if (id === "router") { modelObj = routerModel; modelScale = 0.06; }
+          if (id === "ventilador") { modelObj = ventiladorModel; modelScale = 0.01; }
+          if (id === "secador_pelo") { modelObj = secadorPeloModel; modelScale = 0.06; }
+          if (id === "laptop") { modelObj = laptopModel; modelScale = 0.05; } // LAPTOP mapping
+          // ------------------------------------------------------------
 
           // si existe modelObj, render primitive clonado
           if (modelObj) {
             try {
               const cloned = modelObj.clone(true);
-              cloned.scale.set(modelScale, modelScale, modelScale);
+              // multiplicar la escala actual (auto-scale aplicada) por el multiplicador que definiste
+              cloned.scale.multiplyScalar(modelScale);
+
+              // ---------- CASO ESPECIAL: varios que solemos "upright" ----------
+              if (id === "termo"|| id === "plancha"|| id === "aspiradora" || id === "lavavajillas" || id === "microondas" || id === "batidora" || id === "pc" || id === "consola" ) {
+                // aplicamos Z primero (lo "levanta") y después Y para que mire la izquierda/usuario
+                const extraRotY = r.rotY ?? 0;
+                const yRotation = Math.PI / 2 + extraRotY; // ajuste: 90deg + offset
+                return (
+                  <group key={key} position={[worldX, worldY, worldZ]}>
+                    {/* Rotación en Z primero: lo pone "de pie" */}
+                    <group rotation={[0, 0, Math.PI / 2]}>
+                      {/* Luego rotación en Y: apuntar hacia la izquierda/usuario */}
+                      <group rotation={[0, yRotation, 0]}>
+                        <primitive object={cloned} />
+                      </group>
+                    </group>
+                    <Html distanceFactor={8} center>
+                      <div style={{ fontSize: 11, padding: "4px 6px", background: "rgba(255,255,255,0.92)", borderRadius: 6, color: "#0f172a", border: "1px solid rgba(0,0,0,0.06)" }}>{item.name}</div>
+                    </Html>
+                  </group>
+                );
+              }
+
+              // 🚀 Caso normal (otros objetos)
               return (
                 <group key={key} position={[worldX, worldY, worldZ]} rotation={[0, r.rotY || 0, 0]}>
                   <primitive object={cloned} />
@@ -837,6 +1262,22 @@ function FBXHouseAndAppliances({ selected = {} }) {
 /* ---------------- Fallback simple para electrodomésticos (si no hay FBX) --------------- */
 function ApplianceFallback({ id }) {
   switch (id) {
+    case "foco_led":
+      return (
+        <group>
+          {/* Base */}
+          <mesh position={[0, -0.1, 0]}>
+            <cylinderGeometry args={[0.05, 0.05, 0.2, 16]} />
+            <meshStandardMaterial color={"#e5e7eb"} />
+          </mesh>
+          {/* Bombilla */}
+          <mesh position={[0, 0.15, 0]}>
+            <sphereGeometry args={[0.12, 16, 16]} />
+            <meshStandardMaterial emissive={"#fef9c3"} emissiveIntensity={1.5} color={"#fef9c3"} />
+          </mesh>
+        </group>
+      );
+
     case "tv_65":
       return (
         <group rotation={[0, 0, 0]}>

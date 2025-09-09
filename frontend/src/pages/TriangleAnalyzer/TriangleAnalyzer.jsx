@@ -1,16 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
-/**
- * Geo.jsx
- * Componente Geo mejorado según tus requisitos:
- * - Alerta detallada cuando NO se cumple la desigualdad triangular (explica por qué y sugiere ejemplos concretos)
- * - SafeDelete evita "illegal number of arguments"
- * - Cálculos ampliados en computeProperties: perímetro, semiperímetro, área (Heron), alturas, medianas, bisectrices, R, r, circuncentro, incentro, centroid, ortocentro, ángulos en rad/°
- * - Pythagoras muestra pasos, LHS/RHS, diferencia absoluta y % de error y EXPLICA por qué NO cumple (si aplica)
- *
- * Ajustes solicitados: contenedor principal más ancho y columnas simétricas (6 + 6) para que los paneles izquierdo/derecho queden iguales y el applet no se desborde.
- */
 
 function round(v, d = 6) {
   if (v === null || v === undefined || Number.isNaN(v)) return null;
