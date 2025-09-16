@@ -529,7 +529,8 @@ export default function FunctionComparison() {
     const rowHeight = 20;
     const rows = [
       ["Intersecciones", intersectionsStr.join(" | ")],
-      ["Área |f1 - f2|", areaText],
+      // aquí mostramos la integral con límites explícitos en la etiqueta
+      [`Área = ∫_{${a}}^{${b}} |f₁(x)-f₂(x)| dx`, areaText],
       ["Promedio f1", f1avg],
       ["Promedio f2", f2avg],
       ["Máx/Mín f1", `${f1max} / ${f1min}`],
@@ -936,7 +937,16 @@ export default function FunctionComparison() {
       </div>
 
       <div className="bg-white shadow rounded-xl p-4">
-        <h3 className="text-lg font-semibold text-indigo-600 text-center">Intersecciones y Área (cálculo JS)</h3>
+        <h3 className="text-lg font-semibold text-indigo-600 text-center">
+          Intersecciones y Área —{" "}
+          <span className="text-sm font-normal">
+            <span style={{ fontFamily: "serif", fontSize: 16 }}>∫</span>
+            <sub style={{ marginLeft: 4 }}>{a}</sub>
+            <sup style={{ marginLeft: 4 }}>{b}</sup>{" "}
+            <span style={{ fontFamily: "monospace" }}>|f₁(x)−f₂(x)| dx</span>
+          </span>
+        </h3>
+
         <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="text-center">
             <p className="font-medium">Intersecciones f1 = f2</p>
@@ -952,7 +962,10 @@ export default function FunctionComparison() {
           </div>
 
           <div className="text-center">
-            <p className="font-medium">Área |f1 - f2|</p>
+            <p className="font-medium">
+              Área: <span className="font-mono">∫</span>
+              <sub>{a}</sub><sup>{b}</sup> <span className="font-mono">|f₁(x)-f₂(x)| dx</span>
+            </p>
             <p className="mt-2 font-semibold">{Number(stats.area || 0).toFixed(6)}</p>
           </div>
 
